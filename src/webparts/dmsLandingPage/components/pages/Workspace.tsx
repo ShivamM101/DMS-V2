@@ -7,7 +7,7 @@ import { DefaultButton, PrimaryButton, PanelType, Panel, DialogType, TextField, 
 import { ArrowUpload20Regular, FolderAdd20Regular, Add20Regular, Home20Regular, ChevronRight12Regular, MoreHorizontalRegular, ChevronRight24Regular, ChevronDown24Regular } from '@fluentui/react-icons';
 import Sidebar from "../../common/component/Sidebar";
 import { FolderNode } from "../../common/component/FolderTree";
-import { buildBreadcrumbPath, buildFolderHierarchy, buildLibraryRootPath, checkButtons, checkExtension, fileTypeConfig, getAllDocuments, getChildFolders, getOpenAppURL } from "../../common/commonfunction";
+import { buildBreadcrumbPath, buildFolderHierarchy, buildLibraryRootPath, checkButtons, checkExtension, fileTypeConfig, getAllDocuments, getChildFolders, getDocumentVersion, getOpenAppURL, resolveVersionHistoryTarget } from "../../common/commonfunction";
 import ReusableDataTable from "../ResuableComponents/ReusableDataTable";
 import { spfi, PermissionKind } from "@pnp/sp/presets/all";
 import { SPFx } from "@pnp/sp";
@@ -1254,17 +1254,36 @@ const Workspace: React.FunctionComponent<IWorkspaceProps> = ({ context }) => {
                 setItemId(item.ListItemAllFields.Id);
                 setHideDialog(true);
                 break;
-            case "Versions":
+            case "Versions": {
                 setActionButton(null);
                 setIsVersionsLoading(true);
                 setIsVersionsOverlayVisible(false);
                 setPanelSize(PanelType.large);
-                const url = `${SiteURL}/_layouts/15/Versions.aspx?list=${tileData?.LibraryName}&FileName=${item.ServerRelativeUrl}&IsDlg=${item.ListItemAllFields.Id}`;
-                setVersionsPanelUrl(url);
-                setPanelForm(null);
+
+                // SharePoint's version history page needs the GUID of the library the
+                // file really lives in plus the id of the file's list item; both are
+                // resolved from SharePoint here (see resolveVersionHistoryTarget) so
+                // nested folders, spaces/special characters in the name and every file
+                // type (PDF, Word, Excel, PowerPoint, …) open the correct history.
+                const versionHistoryTarget = await resolveVersionHistoryTarget(context, item, tileData?.LibraryName);
+
+                if (!versionHistoryTarget.url) {
+                    // Invalid document reference: report it instead of showing a page
+                    // that would only display "Item does not exist" from SharePoint.
+                    setIsVersionsLoading(false);
+                    setVersionsPanelUrl("");
+                    setAlertMsg(versionHistoryTarget.error || "Version history is not available for this document.");
+                    setPopupType("warning");
+                    setIsPopupBoxVisible(true);
+                    break;
+                }
+
                 setPanelTitle(DisplayLabel.Versions);
+                setVersionsPanelUrl(versionHistoryTarget.url);
+                setPanelForm(null);
                 setIsOpenCommonPanel(true);
                 break;
+            }
             case "Rename":
                 setFileNameErr("");
                 setItemId(item.ListItemAllFields.Id);
@@ -2082,7 +2101,10 @@ const Workspace: React.FunctionComponent<IWorkspaceProps> = ({ context }) => {
                 maxWidth: 80,
                 cellRenderer: (item: any) =>
                     <span className="table-cell-text table-cell-version" data-testid={`text-version-${item.id}`}>
-                        v{item.data?.Name?.split(".").pop() === "pdf" ? item?.data?.ListItemAllFields?.Level : item?.data?.ListItemAllFields?.OData__UIVersionString}
+                        v{getDocumentVersion(
+                            item?.data?.ListItemAllFields?.Level,
+                            item?.data?.ListItemAllFields?.OData__UIVersionString
+                        ) || "-"}
                     </span>
             },
             {
